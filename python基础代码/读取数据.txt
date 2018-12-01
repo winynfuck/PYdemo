@@ -1,0 +1,139 @@
+import numpy as np
+import scipy
+from scipy import io as sio
+import pandas as pd
+import os
+import cv2
+
+
+
+random = np.random.RandomState(1024)
+image_shapes = (256, 256, 3)
+
+class_num = 6
+label_dict = {'OCEAN': 0, 'MOUNTAIN': 1, 'LAKE': 2, 'FARMLAND': 3, 'DESERT': 4, 'CITY': 5}
+rev_label_dict = { '0': 'OCEAN', '1': 'MOUNTAIN', '2':'LAKE', '3': 'FARMLAND','4': 'DESERT', '5': 'CITY'}
+
+test_img_dir = './data_test/image/test'#测试集图片目录
+test_label_file = './data_test/result.csv'#测试集标签目录
+train_img_dirs = [ './data_train/image', './h_train/h_image']#训练集图片目录
+train_label_files = ['./data_train/label.csv', './h_train/h_label.csv']
+
+train_prefix = './train_'
+valid_prefix = './valid_'
+
+def trav_dir_file(dir_path):
+    '获取目录中文件名组成的列表file_paths'
+    if not os.path.exists(dir_path):
+        return []
+    else:
+        dir_list = os.listdir(dir_path)
+        file_paths = []
+        for item in dir_list:
+            if os.path.isfile(item):
+                file_paths.append(item)
+
+        return file_paths
+
+class Data:
+    def __init__(self, mode='train'):
+        '此处设置了两种模式'
+        if mode == 'train':
+            self.images_path = train_img_dirs[0]
+            self.labels_path = train_label_files[0]
+        elif mode == 'train_h':
+            self.images_path = train_img_dirs[1]
+            self.labels_path = train_label_files[1]
+        else:
+            self.images_path = test_img_dir
+
+    def read_data(self):
+        '读取数据'
+        if self.labels_path != '':
+            table = pd.read_csv(self.labels_path)#使用panda模块读取csv文件。
+            self.image_files = np.array(table['name'])
+            self.labels = np.zeros(len(self.image_files))
+            labels = np.array(table['class'])
+            for image_ind in range(len(self.image_files)):
+                self.image_files[image_ind] = self.images_path + '/' + self.image_files[image_ind]
+                self.labels[image_ind] = label_dict[labels[image_ind]]
+        else:
+            self.image_files = trav_dir_file(test_img_dir)
+
+        self.num = len(self.image_files)
+        self.images = np.zeros(shape=[self.num, image_shapes[0], image_shapes[1], image_shapes[2]], dtype=np.uint8)
+        for image_index in range(len(self.image_files)):
+            image_file = self.image_files[image_index]
+            try:
+                image = cv2.imread(image_file)
+                image = image[:, :, [2, 1, 0]]
+                image = (cv2.resize(image, dsize=(image_shapes[0], image_shapes[1]))).astype(np.uint8)
+                self.images[image_index, :, :, :] = image
+            except FileExistsError as e:
+                print('image ' + image_file + ' is not exist!!')
+                return
+
+    def split_cv(self, k_fold=5, random=random, verbose=1):
+        # each class average split
+        valid_ratio = 1 / k_fold
+        for k_index in range(k_fold):
+            if verbose:
+                print('Start '+ str(k_index) + ' Time Split')
+            label_nums = np.arange(0, self.num)
+            trains = {} ; valids = {}
+            for class_index in range(class_num):
+                each_class_indexes = label_nums[self.labels == class_index]
+                each_num = each_class_indexes.shape[0]
+                valid_num = int(valid_ratio * each_num) ; train_num = each_num - valid_num
+                random.shuffle(each_class_indexes)
+                valid_indexes = each_class_indexes[0:valid_num] ; train_indexes = each_class_indexes[valid_num:]
+                trains[rev_label_dict[str(class_index)]] = self.images[train_indexes,:,:,:]
+                valids[rev_label_dict[str(class_index)]] = self.images[valid_indexes,:,:,:]
+
+                if verbose:
+                    print('Train: ' + str(train_num) +' Valid:' + str(valid_num))
+
+            sio.savemat(file_name='./' + train_prefix + str(k_index), mdict=trains)
+            sio.savemat(file_name='./' + valid_prefix + str(k_index), mdict=valids)
+
+            if verbose:
+                print('-'*20)
+
+    def _gen_data(self, data):
+        flag = True
+        for key in data.keys():
+            if key not in label_dict.keys():
+                continue;
+            images = np.array(data[key], dtype=np.float32)
+            images = images/255
+            cur_label = np.array(label_dict[key], dtype=np.float32)
+            labels = np.repeat(cur_label, repeats=images.shape[0])
+            if flag:
+                new_images = images
+                new_labels = labels
+                flag = False
+            else:
+                new_images = np.concatenate([new_images, images], axis=0)
+                new_labels = np.concatenate([new_labels, labels], axis=0)
+        return new_images, new_labels
+
+    def _shuffle(self, images, labels, random=random):
+        indexes = np.arange(labels.shape[0])
+        random.shuffle(indexes)
+        return images[indexes], labels[indexes]
+
+    def load_mat(self, k=0, shuffle=False):
+        train_data = sio.loadmat(train_prefix + str(k))
+        valid_data = sio.loadmat(valid_prefix + str(k))
+        self.train_images, self.train_labels = self._gen_data(train_data)
+        self.valid_images, self.valid_labels = self._gen_data(valid_data)
+
+    def shuffle(self, random=random):
+        train_images, train_labels = self._shuffle(self.train_images, self.train_labels)
+        return train_images, train_labels
+
+if __name__ == '__main__':
+    pass
+    # data = Data()
+    # data.read_data()
+    # data.split_cv()
